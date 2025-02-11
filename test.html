@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>WebRTC 클라이언트 - 웹캠 스트리밍</title>
+  <!-- SignalR 클라이언트 라이브러리 (버전은 프로젝트에 맞게 조정) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/6.0.0/signalr.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    video { width: 640px; height: 480px; background: #000; }
+  </style>
+</head>
+<body>
+  <h1>WebRTC 클라이언트</h1>
+  <button id="startStream">스트림 시작</button>
+  <video id="remoteVideo" autoplay playsinline controls></video>
+
+  <script>
+    const connection = new signalR.HubConnectionBuilder()
+      .withUrl("http://localhost:5200/signalhub")
+      .build();
+
+    let peerConnection = null;
+    const rtcConfiguration = {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" }
+      ]
+    };
+
+    // SignalR 이벤트: 서버로부터 SDP Offer 수신 (타입: "offer")
+    connection.on("ReceiveSDP", async (senderConnectionId, sdp) => {
+      console.log("서버로부터 SDP 수신:", sdp);
+
+      // 피어 연결 생성 (Offer를 수신할 때 생성)
+      if (!peerConnection) {
+        peerConnection = new RTCPeerConnection(rtcConfiguration);
+
+        // ICE 후보 생성 이벤트: 로컬 ICE 후보를 서버로 전송
+        peerConnection.onicecandidate = event => {
+          if (event.candidate) {
+            console.log("로컬 ICE 후보 생성:", event.candidate.candidate);
+            connection.invoke("SendIceCandidate", "server", event.candidate.candidate)
+              .catch(err => console.error("ICE 후보 전송 에러:", err));
+          }
+        };
+
+        // 원격 트랙 수신 이벤트: 서버에서 보내는 미디어 스트림을 video 태그에 할당
+        peerConnection.ontrack = event => {
+          console.log("원격 트랙 수신:", event.streams);
+          const remoteVideo = document.getElementById("remoteVideo");
+          if (remoteVideo.srcObject !== event.streams[0]) {
+            remoteVideo.srcObject = event.streams[0];
+            console.log("원격 스트림 설정 완료");
+          }
+        };
+      }
+
+      // 서버에서 보내온 SDP를 remote description으로 설정 (Offer로 가정)
+      try {
+        await peerConnection.setRemoteDescription({ type: "offer", sdp: sdp });
+        console.log("Remote SDP 설정 완료");
+
+        // Answer 생성 및 local description 설정
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        console.log("SDP Answer 생성 및 설정 완료:", answer.sdp);
+
+        // 생성한 Answer를 SignalR을 통해 서버에 전송
+        await connection.invoke("SendSDP", "server", answer.sdp);
+      } catch (err) {
+        console.error("SDP 처리 중 에러:", err);
+      }
+    });
+
+    // SignalR 이벤트: ICE 후보 수신
+    connection.on("ReceiveIceCandidate", async (senderConnectionId, candidate) => {
+      console.log("서버로부터 ICE 후보 수신:", candidate);
+      try {
+        await peerConnection.addIceCandidate({ candidate: candidate });
+        console.log("ICE 후보 추가 완료");
+      } catch (err) {
+        console.error("ICE 후보 추가 에러:", err);
+      }
+    });
+
+    // SignalR 연결 시작
+    connection.start()
+      .then(() => console.log("SignalR 연결 성공"))
+      .catch(err => console.error("SignalR 연결 에러:", err));
+
+    // 스트림 시작 버튼 클릭 시 서버의 StartStream() 호출
+    document.getElementById("startStream").addEventListener("click", () => {
+      connection.invoke("StartStream")
+        .catch(err => console.error("StartStream 호출 에러:", err));
+    });
+  </script>
+</body>
+</html>
