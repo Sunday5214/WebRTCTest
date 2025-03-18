@@ -1,61 +1,48 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>WebRTC Client</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Send-Only Client</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/5.0.11/signalr.min.js"></script>
 </head>
 <body>
-  <video id="video" autoplay playsinline controls style="width: 640px; height: 480px;"></video>
+    <h2>Sending WebRTC Stream...</h2>
 
-  <script>
-    // RTCPeerConnection 생성 (STUN 서버 추가 권장)
-    const configuration = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' }
-      ]
-    };
-    const pc = new RTCPeerConnection(configuration);
+    <script>
+        const connection = new signalR.HubConnectionBuilder()
+            .withUrl("http://192.168.0.123:5000/webrtc")  // ASP.NET Core 시그널링 서버 주소
+            .build();
 
-    // WebSocket Signaling 연결
-    const ws = new WebSocket('ws://localhost:8080');
+        connection.start().then(startStream).catch(err => console.error(err));
 
-    ws.onopen = async () => {
-      console.log('Signaling 서버에 연결됨');
+        let peerConnection;
+        const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
-      // 이 예제에서는 브라우저가 offer를 만들고, GStreamer에서 answer를 보내오는 구조로 가정
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      ws.send(JSON.stringify({ sdp: pc.localDescription }));
-    };
+        async function startStream() {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            peerConnection = new RTCPeerConnection(config);
 
-    ws.onmessage = async (event) => {
-      const message = JSON.parse(event.data);
-      if (message.sdp) {
-        console.log('SDP 수신:', message.sdp.type);
-        await pc.setRemoteDescription(new RTCSessionDescription(message.sdp));
-      } else if (message.ice) {
-        console.log('ICE 후보 수신');
-        try {
-          await pc.addIceCandidate(message.ice);
-        } catch (e) {
-          console.error('ICE 후보 추가 오류:', e);
+            stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    connection.invoke("SendIceCandidate", JSON.stringify(event.candidate));
+                }
+            };
+
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            connection.invoke("SendOffer", JSON.stringify(offer));
         }
-      }
-    };
 
-    pc.onicecandidate = event => {
-      if (event.candidate) {
-        console.log('ICE 후보 전송');
-        ws.send(JSON.stringify({ ice: event.candidate }));
-      }
-    };
+        connection.on("ReceiveAnswer", async answer => {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(JSON.parse(answer)));
+        });
 
-    // 원격 트랙(비디오) 수신 시 처리
-    pc.ontrack = event => {
-      console.log('트랙 수신');
-      const video = document.getElementById('video');
-      video.srcObject = event.streams[0];
-    };
-  </script>
+        connection.on("ReceiveIceCandidate", async candidate => {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(JSON.parse(candidate)));
+        });
+    </script>
 </body>
 </html>
