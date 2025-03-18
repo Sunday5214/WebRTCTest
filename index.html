@@ -11,7 +11,7 @@
 
     <script>
         const connection = new signalR.HubConnectionBuilder()
-            .withUrl("http://192.168.0.123:5000/webrtc")  // ASP.NET Core 시그널링 서버 주소
+            .withUrl("http://121.141.6.56:5000/webrtc")  // ASP.NET Core 시그널링 서버 주소
             .build();
 
         connection.start().then(startStream).catch(err => console.error(err));
